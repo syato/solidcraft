@@ -1,0 +1,76 @@
+name: P1 review verification
+
+on:
+  push:
+    branches: [verify/p1-review]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: 0
+  CARGO_BUILD_JOBS: 3
+  CARGO_PROFILE_CI_DEBUG: 0
+  CARGO_PROFILE_DEV_DEBUG: 0
+
+jobs:
+  native:
+    name: Native regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 4
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          components: rustfmt,clippy
+      - name: Install native build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends libudev-dev libxkbcommon-dev
+      - name: Run the focused native regressions
+        run: |
+          cargo test --locked --profile ci --lib \
+            -p solidcraft-engine -p solidcraft-mcp -p solidcraft-ui-egui -- \
+            inactive_component_patterns_keep_their_occurrences_and_joints \
+            preparing_a_host_save_leaves_the_existing_file_and_backup_alone \
+            a_browser_save_acknowledges_the_written_revision_of_its_own_tab \
+            a_browser_control_save_replies_only_after_persistence \
+            bridged_rollback_batch rollback_batch_ batch_keeps_the_auto_session \
+            a_failed_headless_batch_can_restore_its_design_after_opening_another
+      - name: Run the repository checks and native lint
+        run: cargo xtask fast --base 67fe1dace415c3269e6650b88d821c585ec7b330 --no-tests
+
+  browser:
+    name: Real Chrome regression
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@1.99.1
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install Trunk
+        shell: bash
+        run: |
+          curl -fsSL https://github.com/trunk-rs/trunk/releases/download/v0.21.14/trunk-x86_64-unknown-linux-gnu.tar.gz |
+            tar -xz -C "$HOME/.cargo/bin" trunk
+      - name: Build the browser app
+        id: build
+        working-directory: apps/solidcraft-web
+        run: trunk build --public-url ./ --dist "$RUNNER_TEMP/solidcraft-p1-web"
+      - name: Test the browser command and storage paths
+        run: cargo xtask web-api-test --site "$RUNNER_TEMP/solidcraft-p1-web"
+      - name: Preserve the built app for screenshot verification
+        if: always() && steps.build.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: p1-review-web-build
+          path: ${{ runner.temp }}/solidcraft-p1-web/
+          retention-days: 1
+          if-no-files-found: error
